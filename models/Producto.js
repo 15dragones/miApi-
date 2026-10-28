@@ -15,7 +15,18 @@ const Producto = sequelize.define('Producto', {
     },
     stock: {
         type: DataTypes.INTEGER,
+        allowNull: false,
         defaultValue: 0
+    },
+    categoriaId: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        field: 'categoria_id'
+    },
+    proveedorId: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        field: 'proveedor_id'
     }
 }, {
     timestamps: true
