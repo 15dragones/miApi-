@@ -25,6 +25,11 @@ API REST con Express, Sequelize y MySQL para el panel `appInventario`.
 Al arrancar, Sequelize sincroniza el esquema existente y crea las tablas `Productos`,
 `Categorias`, `Proveedores`, `Usuarios` y `Movimientos`, además de sus relaciones.
 
+Para crear la estructura manualmente en HeidiSQL, también puedes ejecutar
+[`database/schema.sql`](./database/schema.sql). El archivo crea las tablas y relaciones
+sin copiar cuentas ni datos personales. Consulta [`database/README.md`](./database/README.md)
+para los pasos de importación.
+
 ## Relaciones y endpoints
 
 - Una categoría puede tener varios productos; cada producto nuevo debe tener categoría.
