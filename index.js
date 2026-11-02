@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const { Op } = require('sequelize');
 const sequelize = require('./config/db');
 const Producto = require('./models/Producto');
@@ -7,6 +8,9 @@ const Categoria = require('./models/Categoria');
 const Proveedor = require('./models/Proveedor');
 const Usuario = require('./models/Usuario');
 const Movimiento = require('./models/Movimiento');
+const { autenticar, autorizar } = require('./middleware/autenticacion');
+const rutasAutenticacion = require('./routes/autenticacion');
+const { hashPassword } = require('./services/passwords');
 
 Producto.belongsTo(Categoria, { as: 'categoria', foreignKey: 'categoriaId' });
 Categoria.hasMany(Producto, { as: 'productos', foreignKey: 'categoriaId' });
@@ -18,12 +22,27 @@ Movimiento.belongsTo(Usuario, { as: 'usuario', foreignKey: 'usuarioId' });
 Usuario.hasMany(Movimiento, { as: 'movimientos', foreignKey: 'usuarioId' });
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+const origenesPermitidos = (process.env.FRONTEND_ORIGINS ||
+    'http://localhost:5173,http://127.0.0.1:5173')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+app.use(helmet());
+app.use(cors({
+    origin: origenesPermitidos,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    maxAge: 86400
+}));
+app.use(express.json({ limit: '1mb' }));
 
 app.get('/', (_req, res) => {
     res.send('¡API Backend funcionando exitosamente!');
 });
+
+app.use('/api/auth', rutasAutenticacion);
+app.use(autenticar);
 
 function validarId(value) {
     if (typeof value === 'boolean' || value === '') {
@@ -144,6 +163,42 @@ function validarProveedor(body) {
     return { values: { razonSocial, contacto, telefono, email: email || null } };
 }
 
+function validarUsuario(body, { requirePassword = false } = {}) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        return { error: 'Debes enviar los datos del usuario.' };
+    }
+    const nombre = typeof body.nombre === 'string' ? body.nombre.trim() : '';
+    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const rol = body.rol;
+    const password = body.password;
+    if (!nombre || nombre.length > 120) {
+        return { error: 'El nombre es obligatorio y no debe superar 120 caracteres.' };
+    }
+    if (!email || email.length > 180 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return { error: 'Ingresa un correo electrónico válido.' };
+    }
+    if (!['Administrador', 'Almacenero'].includes(rol)) {
+        return { error: 'Selecciona un rol válido.' };
+    }
+    if ((requirePassword || password !== undefined && password !== '') &&
+        (typeof password !== 'string' || password.length < 8 ||
+            Buffer.byteLength(password, 'utf8') > 72)) {
+        return { error: 'La contraseña debe tener al menos 8 caracteres y no superar 72 bytes.' };
+    }
+    if (body.activo !== undefined && typeof body.activo !== 'boolean') {
+        return { error: 'El estado activo debe ser verdadero o falso.' };
+    }
+    return {
+        values: {
+            nombre,
+            email,
+            rol,
+            ...(body.activo !== undefined ? { activo: body.activo } : {}),
+            ...(typeof password === 'string' && password ? { password } : {})
+        }
+    };
+}
+
 async function validarRelacionesProducto(values) {
     if (!await Categoria.findByPk(values.categoriaId)) {
         return 'La categoría seleccionada no existe.';
@@ -154,16 +209,21 @@ async function validarRelacionesProducto(values) {
     return null;
 }
 
-function registrarRutasCatalogo(path, Model, validar, campoOrden) {
+function registrarRutasCatalogo(path, Model, validar, campoOrden, options = {}) {
+    const administrador = autorizar('Administrador');
+
     app.get(path, async (_req, res) => {
         try {
-            res.json(await Model.findAll({ order: [[campoOrden, 'ASC']] }));
+            res.json(await Model.findAll({
+                include: options.include || [],
+                order: [[campoOrden, 'ASC']]
+            }));
         } catch (error) {
             responderError(res, error, `No se pudieron obtener ${path}.`);
         }
     });
 
-    app.post(path, async (req, res) => {
+    app.post(path, administrador, async (req, res) => {
         const resultado = validar(req.body);
         if (resultado.error) {
             return res.status(400).json({ error: resultado.error });
@@ -175,7 +235,7 @@ function registrarRutasCatalogo(path, Model, validar, campoOrden) {
         }
     });
 
-    app.put(`${path}/:id`, async (req, res) => {
+    app.put(`${path}/:id`, administrador, async (req, res) => {
         const id = validarId(req.params.id);
         if (!id) {
             return res.status(400).json({ error: 'El ID debe ser un entero positivo.' });
@@ -196,7 +256,7 @@ function registrarRutasCatalogo(path, Model, validar, campoOrden) {
         }
     });
 
-    app.delete(`${path}/:id`, async (req, res) => {
+    app.delete(`${path}/:id`, administrador, async (req, res) => {
         const id = validarId(req.params.id);
         if (!id) {
             return res.status(400).json({ error: 'El ID debe ser un entero positivo.' });
@@ -214,8 +274,105 @@ function registrarRutasCatalogo(path, Model, validar, campoOrden) {
     });
 }
 
-registrarRutasCatalogo('/categorias', Categoria, validarCategoria, 'nombre');
+registrarRutasCatalogo('/categorias', Categoria, validarCategoria, 'nombre', {
+    include: [{ model: Producto, as: 'productos', attributes: ['id'] }]
+});
 registrarRutasCatalogo('/proveedores', Proveedor, validarProveedor, 'razonSocial');
+
+app.get('/usuarios', autorizar('Administrador'), async (_req, res) => {
+    try {
+        const usuarios = await Usuario.findAll({
+            attributes: ['id', 'nombre', 'email', 'rol', 'activo'],
+            order: [['nombre', 'ASC']]
+        });
+        return res.json(usuarios);
+    } catch (error) {
+        return responderError(res, error, 'No se pudieron obtener los usuarios.');
+    }
+});
+
+app.post('/usuarios', autorizar('Administrador'), async (req, res) => {
+    const resultado = validarUsuario(req.body, { requirePassword: true });
+    if (resultado.error) {
+        return res.status(400).json({ error: resultado.error });
+    }
+    try {
+        const { password, ...values } = resultado.values;
+        const usuario = await Usuario.create({
+            ...values,
+            passwordHash: await hashPassword(password)
+        });
+        const { passwordHash: _passwordHash, ...usuarioSeguro } = usuario.get({ plain: true });
+        return res.status(201).json(usuarioSeguro);
+    } catch (error) {
+        return responderError(res, error, 'No se pudo crear el usuario.');
+    }
+});
+
+app.put('/usuarios/:id', autorizar('Administrador'), async (req, res) => {
+    const id = validarId(req.params.id);
+    if (!id) {
+        return res.status(400).json({ error: 'El ID debe ser un entero positivo.' });
+    }
+    const resultado = validarUsuario(req.body);
+    if (resultado.error) {
+        return res.status(400).json({ error: resultado.error });
+    }
+    try {
+        const usuario = await Usuario.findByPk(id);
+        if (!usuario) {
+            return res.status(404).json({ error: 'No se encontró el usuario.' });
+        }
+        if (usuario.id === req.usuario.id &&
+            (resultado.values.activo === false || resultado.values.rol !== 'Administrador')) {
+            return res.status(400).json({
+                error: 'No puedes desactivar ni quitarte el rol de administrador.'
+            });
+        }
+        if (usuario.rol === 'Administrador' &&
+            (resultado.values.activo === false || resultado.values.rol !== 'Administrador') &&
+            await Usuario.count({ where: { rol: 'Administrador', activo: true } }) <= 1) {
+            return res.status(400).json({
+                error: 'Debe permanecer al menos un administrador activo.'
+            });
+        }
+        const { password, ...values } = resultado.values;
+        if (password) {
+            values.passwordHash = await hashPassword(password);
+        }
+        await usuario.update(values);
+        const { passwordHash: _passwordHash, ...usuarioSeguro } = usuario.get({ plain: true });
+        return res.json(usuarioSeguro);
+    } catch (error) {
+        return responderError(res, error, 'No se pudo actualizar el usuario.');
+    }
+});
+
+app.delete('/usuarios/:id', autorizar('Administrador'), async (req, res) => {
+    const id = validarId(req.params.id);
+    if (!id) {
+        return res.status(400).json({ error: 'El ID debe ser un entero positivo.' });
+    }
+    try {
+        const usuario = await Usuario.findByPk(id);
+        if (!usuario) {
+            return res.status(404).json({ error: 'No se encontró el usuario.' });
+        }
+        if (usuario.id === req.usuario.id) {
+            return res.status(400).json({ error: 'No puedes eliminar tu propia cuenta.' });
+        }
+        if (usuario.rol === 'Administrador' && usuario.activo &&
+            await Usuario.count({ where: { rol: 'Administrador', activo: true } }) <= 1) {
+            return res.status(400).json({
+                error: 'Debe permanecer al menos un administrador activo.'
+            });
+        }
+        await usuario.destroy();
+        return res.json({ message: 'Usuario eliminado.' });
+    } catch (error) {
+        return responderError(res, error, 'No se pudo eliminar el usuario.');
+    }
+});
 
 app.get('/productos', async (_req, res) => {
     try {
@@ -326,8 +483,7 @@ app.post('/movimientos', async (req, res) => {
     const productoId = validarId(req.body?.productoId);
     const tipoMovimiento = req.body?.tipoMovimiento;
     const cantidad = Number(req.body?.cantidad);
-    const usuarioId = req.body?.usuarioId === null || req.body?.usuarioId === undefined ||
-        req.body?.usuarioId === '' ? null : validarId(req.body.usuarioId);
+    const usuarioId = req.usuario.id;
     const observaciones = typeof req.body?.observaciones === 'string'
         ? req.body.observaciones.trim()
         : '';
@@ -343,10 +499,6 @@ app.post('/movimientos', async (req, res) => {
         return res.status(400).json({
             error: 'La cantidad debe ser un entero distinto de cero; los ajustes aceptan signo.'
         });
-    }
-    if (usuarioId === null && req.body?.usuarioId !== null &&
-        req.body?.usuarioId !== undefined && req.body?.usuarioId !== '') {
-        return res.status(400).json({ error: 'Selecciona un usuario válido.' });
     }
     if (!observaciones || observaciones.length > 1000) {
         return res.status(400).json({
@@ -443,6 +595,7 @@ const PORT = process.env.PORT || 3006;
 
 async function startServer() {
     try {
+        require('./middleware/autenticacion').obtenerSecretoJwt();
         await sequelize.sync({ alter: true });
         console.log('Base de datos conectada y sincronizada.');
         app.listen(PORT, () => {
