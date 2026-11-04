@@ -146,4 +146,33 @@ router.get('/me', autenticar, (req, res) => {
     return res.json({ user: usuarioSeguro(req.usuario) });
 });
 
+router.patch('/me', autenticar, async (req, res, next) => {
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+        return res.status(400).json({ error: 'Debes enviar los datos del perfil.' });
+    }
+
+    const nombre = typeof req.body.nombre === 'string' ? req.body.nombre.trim() : '';
+    const email = typeof req.body.email === 'string'
+        ? req.body.email.trim().toLowerCase()
+        : '';
+    if (!nombre || nombre.length > 120) {
+        return res.status(400).json({
+            error: 'El nombre es obligatorio y no debe superar 120 caracteres.'
+        });
+    }
+    if (!email || email.length > 180 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ error: 'Ingresa un correo electrónico válido.' });
+    }
+
+    try {
+        await req.usuario.update({ nombre, email });
+        return res.json({ user: usuarioSeguro(req.usuario) });
+    } catch (error) {
+        if (error.name === 'SequelizeUniqueConstraintError') {
+            return res.status(409).json({ error: 'Ya existe una cuenta con ese correo.' });
+        }
+        return next(error);
+    }
+});
+
 module.exports = router;

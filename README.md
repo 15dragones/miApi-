@@ -60,6 +60,11 @@ para los pasos de importación.
 La inserción del Kardex y la actualización de existencias se ejecutan en una única
 transacción de Sequelize.
 
+La API también permite actualizar el perfil autenticado con `PATCH /api/auth/me`, consultar
+los datos compartidos del negocio con `GET /negocio` y actualizarlos con `PUT /negocio`
+(solo para administradores). La tabla `Negocio` se crea con `sequelize.sync()` o al ejecutar
+[`database/schema.sql`](./database/schema.sql).
+
 ## Diagrama entidad-relación
 
 ```mermaid

@@ -8,6 +8,7 @@ const Categoria = require('./models/Categoria');
 const Proveedor = require('./models/Proveedor');
 const Usuario = require('./models/Usuario');
 const Movimiento = require('./models/Movimiento');
+const Negocio = require('./models/Negocio');
 const { autenticar, autorizar } = require('./middleware/autenticacion');
 const rutasAutenticacion = require('./routes/autenticacion');
 const { hashPassword } = require('./services/passwords');
@@ -43,6 +44,84 @@ app.get('/', (_req, res) => {
 
 app.use('/api/auth', rutasAutenticacion);
 app.use(autenticar);
+
+function validarNegocio(body) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        return { error: 'Debes enviar los datos del negocio.' };
+    }
+
+    for (const campo of ['nombreComercial', 'ruc', 'direccion', 'telefono', 'email']) {
+        if (body[campo] !== undefined && typeof body[campo] !== 'string') {
+            return { error: `El campo ${campo} debe ser texto.` };
+        }
+    }
+
+    const nombreComercial = typeof body.nombreComercial === 'string'
+        ? body.nombreComercial.trim()
+        : '';
+    const ruc = typeof body.ruc === 'string' ? body.ruc.trim() : '';
+    const direccion = typeof body.direccion === 'string' ? body.direccion.trim() : '';
+    const telefono = typeof body.telefono === 'string' ? body.telefono.trim() : '';
+    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+
+    if (!nombreComercial || nombreComercial.length > 120) {
+        return { error: 'El nombre comercial es obligatorio y no debe superar 120 caracteres.' };
+    }
+    if (ruc && !/^\d{11}$/.test(ruc)) {
+        return { error: 'El RUC debe contener exactamente 11 dígitos.' };
+    }
+    if (direccion.length > 255 || telefono.length > 40 || email.length > 180) {
+        return { error: 'Revisa la longitud de los datos del negocio.' };
+    }
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return { error: 'Ingresa un correo electrónico válido para el negocio.' };
+    }
+
+    return {
+        values: {
+            nombreComercial,
+            ruc: ruc || null,
+            direccion: direccion || null,
+            telefono: telefono || null,
+            email: email || null
+        }
+    };
+}
+
+app.get('/negocio', async (_req, res) => {
+    try {
+        const [negocio] = await Negocio.findOrCreate({
+            where: { id: 1 },
+            defaults: { nombreComercial: 'Mi negocio' }
+        });
+        return res.json(negocio);
+    } catch (error) {
+        return responderError(res, error, 'No se pudieron obtener los datos del negocio.');
+    }
+});
+
+app.put('/negocio', autorizar('Administrador'), async (req, res) => {
+    const resultado = validarNegocio(req.body);
+    if (resultado.error) {
+        return res.status(400).json({ error: resultado.error });
+    }
+    try {
+        const [negocio] = await Negocio.findOrCreate({
+            where: { id: 1 },
+            defaults: resultado.values
+        });
+        if (negocio.nombreComercial !== resultado.values.nombreComercial ||
+            negocio.ruc !== resultado.values.ruc ||
+            negocio.direccion !== resultado.values.direccion ||
+            negocio.telefono !== resultado.values.telefono ||
+            negocio.email !== resultado.values.email) {
+            await negocio.update(resultado.values);
+        }
+        return res.json(negocio);
+    } catch (error) {
+        return responderError(res, error, 'No se pudieron guardar los datos del negocio.');
+    }
+});
 
 function validarId(value) {
     if (typeof value === 'boolean' || value === '') {

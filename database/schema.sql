@@ -38,6 +38,18 @@ CREATE TABLE IF NOT EXISTS `Usuarios` (
     UNIQUE KEY `usuarios_email_unique` (`email`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `Negocio` (
+    `id` INT NOT NULL,
+    `nombre_comercial` VARCHAR(120) NOT NULL DEFAULT 'Mi negocio',
+    `ruc` VARCHAR(11) NULL,
+    `direccion` VARCHAR(255) NULL,
+    `telefono` VARCHAR(40) NULL,
+    `email` VARCHAR(180) NULL,
+    `createdAt` DATETIME NOT NULL,
+    `updatedAt` DATETIME NOT NULL,
+    PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `Productos` (
     `id` INT NOT NULL AUTO_INCREMENT,
     `nombre` VARCHAR(255) NOT NULL,
